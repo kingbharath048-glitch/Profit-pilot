@@ -7,7 +7,7 @@ export const getProfitabilityInsights = async (products: Product[]): Promise<AII
   
   const prompt = `Analyze the following digital products portfolio. 
   Each product has a fixed unit price and a history of daily logs containing salesCount (number of units sold) and adSpend (INR).
-  The currency is Indian Rupee (INR / â¹).
+  The currency is Indian Rupee (INR / Ã¢ÂÂ¹).
   
   Products Data: ${JSON.stringify(products)}
   
