@@ -38,6 +38,7 @@ import { Product, DailyLog } from './types';
 import { StatCard } from './components/StatCard';
 
 const STORAGE_KEY = 'profitpilot_products_v1';
+const UI_STATE_KEY = 'profitpilot_ui_v1';
 
 const INITIAL_PRODUCTS: Product[] = [
   {
@@ -69,32 +70,33 @@ const INITIAL_PRODUCTS: Product[] = [
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
 const App: React.FC = () => {
+  // --- Data State ---
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
       } catch (e) {
-        console.error("Failed to load products from local storage", e);
         return INITIAL_PRODUCTS;
       }
     }
     return INITIAL_PRODUCTS;
   });
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'products'>('dashboard');
-
+  // --- UI State ---
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'products'>(() => {
+    return (localStorage.getItem(UI_STATE_KEY) as any) || 'dashboard';
+  });
+  const [viewingProductId, setViewingProductId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  
-  const [viewingProduct, setViewingProduct] = useState<Product | null>(null);
   const [editingLog, setEditingLog] = useState<DailyLog | null>(null);
   const [isSavedNotify, setIsSavedNotify] = useState(false);
 
-  // Define newProductState before it is used in handleAddProduct
+  // Form states
   const [newProductState, setNewProductState] = useState<Partial<Product>>({
     name: '',
     category: 'SaaS',
@@ -108,25 +110,33 @@ const App: React.FC = () => {
     miscExpenses: 0
   });
 
+  // --- Persistence Effects ---
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
   }, [products]);
 
+  useEffect(() => {
+    localStorage.setItem(UI_STATE_KEY, activeTab);
+  }, [activeTab]);
+
+  // --- Derived State ---
+  const currentViewingProduct = useMemo(() => {
+    if (!viewingProductId) return null;
+    return products.find(p => p.id === viewingProductId) || null;
+  }, [products, viewingProductId]);
+
   const aggregateMetrics = useMemo(() => {
     let grossRevenue = 0;
     let totalExpenses = 0;
-
     products.forEach(p => {
       p.logs.forEach(log => {
         grossRevenue += (log.salesCount * p.price);
         totalExpenses += log.adSpend + (log.miscExpenses || 0);
       });
     });
-
     const netProfit = grossRevenue - totalExpenses;
     const profitMargin = grossRevenue > 0 ? (netProfit / grossRevenue) * 100 : 0;
     const roi = totalExpenses > 0 ? (netProfit / totalExpenses) * 100 : 0;
-
     return { grossRevenue, netProfit, profitMargin, roi };
   }, [products]);
 
@@ -158,11 +168,11 @@ const App: React.FC = () => {
   }, [productTotals]);
 
   const detailData = useMemo(() => {
-    if (!viewingProduct) return null;
-    const totalSalesCount = viewingProduct.logs.reduce((sum, l) => sum + l.salesCount, 0);
-    const totalRevenue = totalSalesCount * viewingProduct.price;
-    const totalAdSpend = viewingProduct.logs.reduce((sum, l) => sum + l.adSpend, 0);
-    const totalMiscExpenses = viewingProduct.logs.reduce((sum, l) => sum + (l.miscExpenses || 0), 0);
+    if (!currentViewingProduct) return null;
+    const totalSalesCount = currentViewingProduct.logs.reduce((sum, l) => sum + l.salesCount, 0);
+    const totalRevenue = totalSalesCount * currentViewingProduct.price;
+    const totalAdSpend = currentViewingProduct.logs.reduce((sum, l) => sum + l.adSpend, 0);
+    const totalMiscExpenses = currentViewingProduct.logs.reduce((sum, l) => sum + (l.miscExpenses || 0), 0);
     const totalExpenses = totalAdSpend + totalMiscExpenses;
     const netProfit = totalRevenue - totalExpenses;
     const totalRoi = totalExpenses > 0 ? (netProfit / totalExpenses) * 100 : 0;
@@ -173,35 +183,25 @@ const App: React.FC = () => {
       { name: 'Net Profit', value: Math.max(0, netProfit), color: '#10b981' }
     ];
 
-    const sortedLogs = [...viewingProduct.logs].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map(l => {
-      const rev = l.salesCount * viewingProduct.price;
+    const sortedLogs = [...currentViewingProduct.logs].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map(l => {
+      const rev = l.salesCount * currentViewingProduct.price;
       const totalDailyExpenses = l.adSpend + (l.miscExpenses || 0);
       const profit = rev - totalDailyExpenses;
       const roi = totalDailyExpenses > 0 ? (profit / totalDailyExpenses) * 100 : 0;
-      return {
-        ...l,
-        revenue: rev,
-        profit: profit,
-        roi: roi
-      };
+      return { ...l, revenue: rev, profit: profit, roi: roi };
     });
 
     return { totalSalesCount, totalRevenue, totalAdSpend, totalMiscExpenses, netProfit, totalRoi, pieData, sortedLogs };
-  }, [viewingProduct]);
+  }, [currentViewingProduct]);
 
+  // --- Action Handlers ---
   const handleNoteChange = (text: string) => {
-    if (!viewingProduct) return;
-    const updatedProduct = { ...viewingProduct, notes: text };
-    setProducts(prev => prev.map(p => p.id === viewingProduct.id ? updatedProduct : p));
-    setViewingProduct(updatedProduct);
-    
-    // Simple autosave notification
+    if (!viewingProductId) return;
+    setProducts(prev => prev.map(p => p.id === viewingProductId ? { ...p, notes: text } : p));
     setIsSavedNotify(true);
-    const timer = setTimeout(() => setIsSavedNotify(false), 2000);
-    return () => clearTimeout(timer);
+    setTimeout(() => setIsSavedNotify(false), 2000);
   };
 
-  // Fixed: Use correct variable names newProductState and setNewProductState
   const handleAddProduct = () => {
     if (newProductState.name) {
       const productToAdd: Product = {
@@ -223,23 +223,15 @@ const App: React.FC = () => {
       setProducts(prev => prev.map(p => p.id === editingProduct.id ? editingProduct : p));
       setIsEditModalOpen(false);
       setEditingProduct(null);
-      if (viewingProduct?.id === editingProduct.id) {
-        setViewingProduct(editingProduct);
-      }
     }
   };
 
   const handleAddLog = () => {
     if (selectedProductId) {
-      const logEntry: DailyLog = {
-        id: Date.now().toString(),
-        ...newLog
-      };
+      const logEntry: DailyLog = { id: Date.now().toString(), ...newLog };
       setProducts(prev => prev.map(p => {
         if (p.id === selectedProductId) {
-          const updatedP = { ...p, logs: [logEntry, ...p.logs] };
-          if (viewingProduct?.id === p.id) setViewingProduct(updatedP);
-          return updatedP;
+          return { ...p, logs: [logEntry, ...p.logs] };
         }
         return p;
       }));
@@ -249,22 +241,28 @@ const App: React.FC = () => {
   };
 
   const handleUpdateLog = () => {
-    if (viewingProduct && editingLog) {
-      const updatedLogs = viewingProduct.logs.map(l => l.id === editingLog.id ? editingLog : l);
-      const updatedProduct = { ...viewingProduct, logs: updatedLogs };
-      setProducts(prev => prev.map(p => p.id === viewingProduct.id ? updatedProduct : p));
-      setViewingProduct(updatedProduct);
+    if (viewingProductId && editingLog) {
+      setProducts(prev => prev.map(p => {
+        if (p.id === viewingProductId) {
+          const updatedLogs = p.logs.map(l => l.id === editingLog.id ? editingLog : l);
+          return { ...p, logs: updatedLogs };
+        }
+        return p;
+      }));
       setEditingLog(null);
     }
   };
 
   const removeLog = (e: React.MouseEvent, logId: string) => {
     e.stopPropagation();
-    if (viewingProduct && confirm('Remove this daily entry?')) {
-      const updatedLogs = viewingProduct.logs.filter(l => l.id !== logId);
-      const updatedProduct = { ...viewingProduct, logs: updatedLogs };
-      setProducts(prev => prev.map(p => p.id === viewingProduct.id ? updatedProduct : p));
-      setViewingProduct(updatedProduct);
+    if (viewingProductId && confirm('Remove this daily entry?')) {
+      setProducts(prev => prev.map(p => {
+        if (p.id === viewingProductId) {
+          const updatedLogs = p.logs.filter(l => l.id !== logId);
+          return { ...p, logs: updatedLogs };
+        }
+        return p;
+      }));
     }
   };
 
@@ -272,7 +270,7 @@ const App: React.FC = () => {
     e.stopPropagation();
     if (confirm('Are you sure you want to delete this product and all its logs?')) {
       setProducts(prev => prev.filter(p => p.id !== id));
-      if (viewingProduct?.id === id) setViewingProduct(null);
+      if (viewingProductId === id) setViewingProductId(null);
     }
   };
 
@@ -297,14 +295,14 @@ const App: React.FC = () => {
 
         <nav className="flex flex-col gap-2">
           <button 
-            onClick={() => { setActiveTab('dashboard'); setViewingProduct(null); }}
+            onClick={() => { setActiveTab('dashboard'); setViewingProductId(null); }}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'dashboard' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
           >
             <LayoutDashboard size={20} />
             <span className="font-semibold">Dashboard</span>
           </button>
           <button 
-            onClick={() => { setActiveTab('products'); setViewingProduct(null); }}
+            onClick={() => { setActiveTab('products'); setViewingProductId(null); }}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'products' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
           >
             <Package size={20} />
@@ -314,7 +312,7 @@ const App: React.FC = () => {
       </aside>
 
       <main className="flex-1 p-4 md:p-8 overflow-y-auto">
-        {!viewingProduct ? (
+        {!currentViewingProduct ? (
           <>
             <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
               <div>
@@ -325,13 +323,11 @@ const App: React.FC = () => {
                   Advanced unit economics tracking for digital entrepreneurs.
                 </p>
               </div>
-              
               <button 
                 onClick={() => setIsModalOpen(true)}
                 className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl transition-all font-semibold shadow-md shadow-indigo-100"
               >
-                <Plus size={18} />
-                Add Product
+                <Plus size={18} /> Add Product
               </button>
             </header>
 
@@ -430,7 +426,7 @@ const App: React.FC = () => {
                         <tr 
                           key={product.id} 
                           className="hover:bg-indigo-50/30 cursor-pointer transition-colors border-b border-slate-50 last:border-none group"
-                          onClick={() => setViewingProduct(product)}
+                          onClick={() => setViewingProductId(product.id)}
                         >
                           <td className="px-8 py-6">
                             <div className="font-bold text-slate-900 text-lg group-hover:text-indigo-600 transition-colors">{product.name}</div>
@@ -479,7 +475,7 @@ const App: React.FC = () => {
         ) : (
           <div className="animate-in fade-in slide-in-from-right-4 duration-500 max-w-6xl mx-auto pb-20">
             <button 
-              onClick={() => setViewingProduct(null)}
+              onClick={() => setViewingProductId(null)}
               className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-bold mb-6 transition-colors group"
             >
               <ChevronLeft size={20} className="group-hover:-translate-x-1 transition-transform" /> Back to Inventory
@@ -489,16 +485,16 @@ const App: React.FC = () => {
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-2">
                   <span className="px-3 py-1 bg-indigo-50 text-indigo-700 text-[10px] font-bold uppercase rounded-full tracking-widest">
-                    {viewingProduct.category}
+                    {currentViewingProduct.category}
                   </span>
                   <span className="text-slate-300">•</span>
                   <span className="text-slate-500 font-medium">Unit-Based Tracking</span>
                 </div>
-                <h2 className="text-4xl font-extrabold text-slate-900 mb-2">{viewingProduct.name}</h2>
+                <h2 className="text-4xl font-extrabold text-slate-900 mb-2">{currentViewingProduct.name}</h2>
                 <div className="flex items-center gap-6 flex-wrap">
                   <div className="flex flex-col">
                     <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Unit Price</span>
-                    <span className="text-xl font-bold text-indigo-600">{formatCurrency(viewingProduct.price)}</span>
+                    <span className="text-xl font-bold text-indigo-600">{formatCurrency(currentViewingProduct.price)}</span>
                   </div>
                   <div className="h-8 w-px bg-slate-200 hidden md:block"></div>
                   <div className="flex flex-col">
@@ -540,7 +536,7 @@ const App: React.FC = () => {
               <div className="flex gap-3">
                 <button 
                   onClick={() => {
-                    setSelectedProductId(viewingProduct.id);
+                    setSelectedProductId(currentViewingProduct.id);
                     setIsLogModalOpen(true);
                   }}
                   className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
@@ -548,7 +544,7 @@ const App: React.FC = () => {
                   <Plus size={18} /> New Sales Log
                 </button>
                 <button 
-                  onClick={(e) => removeProduct(e, viewingProduct.id)}
+                  onClick={(e) => removeProduct(e, currentViewingProduct.id)}
                   className="p-3 text-slate-400 hover:text-rose-600 bg-white border border-slate-200 rounded-2xl transition-all"
                 >
                   <Trash2 size={20} />
@@ -623,7 +619,7 @@ const App: React.FC = () => {
             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-x-auto mb-10">
               <div className="px-8 py-6 border-b border-slate-50 bg-slate-50/30 flex justify-between items-center sticky left-0">
                 <h4 className="text-lg font-bold text-slate-800">Sales Count History</h4>
-                <span className="text-slate-400 text-sm font-medium">{viewingProduct.logs.length} entries recorded</span>
+                <span className="text-slate-400 text-sm font-medium">{currentViewingProduct.logs.length} entries recorded</span>
               </div>
               <table className="w-full text-left min-w-[900px]">
                 <thead>
@@ -658,9 +654,7 @@ const App: React.FC = () => {
                           <span className="font-bold text-slate-900">{log.salesCount}</span>
                         )}
                       </td>
-                      <td className="px-8 py-5 text-slate-500 font-medium">
-                        {formatCurrency(log.revenue)}
-                      </td>
+                      <td className="px-8 py-5 text-slate-500 font-medium">{formatCurrency(log.revenue)}</td>
                       <td className="px-8 py-5">
                         {editingLog?.id === log.id ? (
                           <input 
@@ -716,13 +710,12 @@ const App: React.FC = () => {
               </table>
             </div>
 
-            {/* Notepad / Scratchpad for the product */}
             <div className="max-w-4xl animate-in fade-in slide-in-from-bottom-6 duration-500">
               <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
                 <div className="bg-indigo-600 px-8 py-4 flex justify-between items-center text-white">
                   <div className="flex items-center gap-3">
                     <FileText size={20} />
-                    <h3 className="text-lg font-bold tracking-tight">Strategy Scratchpad: {viewingProduct.name}</h3>
+                    <h3 className="text-lg font-bold tracking-tight">Strategy Scratchpad: {currentViewingProduct.name}</h3>
                   </div>
                   <div className="flex items-center gap-4">
                     {isSavedNotify && (
@@ -739,7 +732,7 @@ const App: React.FC = () => {
                   <div className="absolute inset-y-0 left-[12.25rem] w-px bg-rose-200 opacity-20 hidden md:block"></div>
                   
                   <textarea
-                    value={viewingProduct.notes || ''}
+                    value={currentViewingProduct.notes || ''}
                     onChange={(e) => handleNoteChange(e.target.value)}
                     className="w-full flex-1 bg-transparent border-none outline-none resize-none font-medium text-slate-800 leading-[2rem] text-lg pl-8 z-10"
                     style={{
@@ -747,7 +740,7 @@ const App: React.FC = () => {
                       backgroundSize: '100% 2rem',
                       fontFamily: 'inherit'
                     }}
-                    placeholder={`Map out growth tactics for ${viewingProduct.name}...`}
+                    placeholder={`Map out growth tactics for ${currentViewingProduct.name}...`}
                   />
                   
                   <div className="mt-8 pt-4 border-t border-slate-300/50 text-slate-400 text-xs italic flex justify-between">
@@ -761,7 +754,7 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Sales Log Modal */}
+      {/* Modals are kept the same but ensured to use current state */}
       {isLogModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
@@ -774,53 +767,29 @@ const App: React.FC = () => {
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Entry Date</label>
                 <div className="relative">
                   <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
-                    type="date" 
-                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                    value={newLog.date}
-                    onChange={e => setNewLog({...newLog, date: e.target.value})}
-                  />
+                  <input type="date" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={newLog.date} onChange={e => setNewLog({...newLog, date: e.target.value})} />
                 </div>
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Sales Count (Units)</label>
                 <div className="relative">
                   <ShoppingCart className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
-                    type="number" 
-                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white text-slate-900"
-                    value={newLog.salesCount}
-                    onChange={e => setNewLog({...newLog, salesCount: parseInt(e.target.value) || 0})}
-                    placeholder="Number of units sold"
-                  />
+                  <input type="number" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white text-slate-900" value={newLog.salesCount} onChange={e => setNewLog({...newLog, salesCount: parseInt(e.target.value) || 0})} placeholder="Number of units sold" />
                 </div>
-                <p className="text-[10px] text-slate-400 italic">Revenue = units * product price</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Ad Spend (₹)</label>
                   <div className="relative">
                     <Target className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input 
-                      type="number" 
-                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                      value={newLog.adSpend}
-                      onChange={e => setNewLog({...newLog, adSpend: parseFloat(e.target.value) || 0})}
-                      placeholder="Daily ads cost"
-                    />
+                    <input type="number" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={newLog.adSpend} onChange={e => setNewLog({...newLog, adSpend: parseFloat(e.target.value) || 0})} placeholder="Daily ads cost" />
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Misc Expenses (₹)</label>
                   <div className="relative">
                     <Receipt className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input 
-                      type="number" 
-                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                      value={newLog.miscExpenses}
-                      onChange={e => setNewLog({...newLog, miscExpenses: parseFloat(e.target.value) || 0})}
-                      placeholder="Other daily costs"
-                    />
+                    <input type="number" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={newLog.miscExpenses} onChange={e => setNewLog({...newLog, miscExpenses: parseFloat(e.target.value) || 0})} placeholder="Other daily costs" />
                   </div>
                 </div>
               </div>
@@ -833,7 +802,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Add Product Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
@@ -844,41 +812,20 @@ const App: React.FC = () => {
             <div className="p-8 space-y-6">
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Product Name</label>
-                <input 
-                  type="text" 
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white text-slate-900"
-                  value={newProductState.name}
-                  onChange={e => setNewProductState({...newProductState, name: e.target.value})}
-                  placeholder="e.g. Masterclass course"
-                />
+                <input type="text" className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white text-slate-900" value={newProductState.name} onChange={e => setNewProductState({...newProductState, name: e.target.value})} placeholder="e.g. Masterclass course" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Category</label>
-                  <select 
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                    value={newProductState.category}
-                    onChange={e => setNewProductState({...newProductState, category: e.target.value as any})}
-                  >
-                    <option>SaaS</option>
-                    <option>E-book</option>
-                    <option>Course</option>
-                    <option>Asset</option>
-                    <option>Newsletter</option>
+                  <select className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={newProductState.category} onChange={e => setNewProductState({...newProductState, category: e.target.value as any})}>
+                    <option>SaaS</option><option>E-book</option><option>Course</option><option>Asset</option><option>Newsletter</option>
                   </select>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Initial Unit Price (₹)</label>
-                  <input 
-                    type="number" 
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                    value={newProductState.price}
-                    onChange={e => setNewProductState({...newProductState, price: parseFloat(e.target.value) || 0})}
-                    placeholder="e.g. 999"
-                  />
+                  <input type="number" className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={newProductState.price} onChange={e => setNewProductState({...newProductState, price: parseFloat(e.target.value) || 0})} placeholder="e.g. 999" />
                 </div>
               </div>
-              <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-lg">Log daily units sold, ad spend, and misc expenses in the Inventory detail view.</p>
             </div>
             <div className="p-6 bg-slate-50 border-t border-slate-100 flex gap-4">
               <button onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-3 rounded-xl font-bold text-slate-600 hover:bg-slate-200 transition-colors">Cancel</button>
@@ -888,7 +835,6 @@ const App: React.FC = () => {
         </div>
       )}
       
-      {/* Edit Product Modal */}
       {isEditModalOpen && editingProduct && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
@@ -899,36 +845,18 @@ const App: React.FC = () => {
             <div className="p-8 space-y-6">
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Product Name</label>
-                <input 
-                  type="text" 
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                  value={editingProduct.name}
-                  onChange={e => setEditingProduct({...editingProduct, name: e.target.value})}
-                />
+                <input type="text" className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={editingProduct.name} onChange={e => setEditingProduct({...editingProduct, name: e.target.value})} />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Category</label>
-                  <select 
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                    value={editingProduct.category}
-                    onChange={e => setEditingProduct({...editingProduct, category: e.target.value as any})}
-                  >
-                    <option>SaaS</option>
-                    <option>E-book</option>
-                    <option>Course</option>
-                    <option>Asset</option>
-                    <option>Newsletter</option>
+                  <select className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={editingProduct.category} onChange={e => setEditingProduct({...editingProduct, category: e.target.value as any})}>
+                    <option>SaaS</option><option>E-book</option><option>Course</option><option>Asset</option><option>Newsletter</option>
                   </select>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Unit Price (₹)</label>
-                  <input 
-                    type="number" 
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900"
-                    value={editingProduct.price}
-                    onChange={e => setEditingProduct({...editingProduct, price: parseFloat(e.target.value) || 0})}
-                  />
+                  <input type="number" className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900" value={editingProduct.price} onChange={e => setEditingProduct({...editingProduct, price: parseFloat(e.target.value) || 0})} />
                 </div>
               </div>
             </div>
