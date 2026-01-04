@@ -4,6 +4,7 @@ export interface DailyLog {
   date: string;
   salesCount: number; // Changed from sales (amount) to salesCount (units)
   adSpend: number;
+  miscExpenses: number;
 }
 
 export interface Product {
@@ -12,6 +13,7 @@ export interface Product {
   category: 'SaaS' | 'E-book' | 'Course' | 'Asset' | 'Newsletter';
   price: number; 
   logs: DailyLog[];
+  notes?: string; // Scratchpad for product-specific strategies
 }
 
 export interface Metrics {

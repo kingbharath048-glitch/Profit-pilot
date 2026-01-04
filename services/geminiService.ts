@@ -3,11 +3,11 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Product, AIInsight } from "../types";
 
 export const getProfitabilityInsights = async (products: Product[]): Promise<AIInsight[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || 'FAKE_API_KEY_FOR_DEVELOPMENT'! });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
   
   const prompt = `Analyze the following digital products portfolio. 
   Each product has a fixed unit price and a history of daily logs containing salesCount (number of units sold) and adSpend (INR).
-  The currency is Indian Rupee (INR / ÃÂ¢ÃÂÃÂ¹).
+  The currency is Indian Rupee (INR / ₹).
   
   Products Data: ${JSON.stringify(products)}
   
